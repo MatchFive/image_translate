@@ -32,6 +32,9 @@ export interface WsProgressMessage {
   error?: string
 }
 
+/** 任务来源 */
+export type TaskSource = 'excel' | 'manual'
+
 /** 上传响应 */
 export interface UploadResponse {
   taskId: string

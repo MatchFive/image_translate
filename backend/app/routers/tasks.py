@@ -89,6 +89,82 @@ async def upload_excel(
     )
 
 
+@router.post("/upload-manual", response_model=TaskUploadResponse)
+async def upload_manual(
+    file: UploadFile = File(..., description="待处理的图片文件（PNG）"),
+    target_text: str = File(..., description="目标替换文本"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    手动上传单张图片 + 目标文本，创建处理任务。
+
+    上传一张 PNG 图片和对应的目标替换文本，系统处理后返回结果图片。
+    """
+    # 验证文件类型
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="缺少文件名")
+    if not file.filename.lower().endswith(".png"):
+        raise HTTPException(status_code=400, detail="仅支持 PNG 格式图片")
+
+    # 验证目标文本
+    if not target_text or not target_text.strip():
+        raise HTTPException(status_code=400, detail="目标替换文本不能为空")
+
+    # 验证文件大小
+    content = await file.read()
+    if len(content) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件大小超过限制 ({settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
+        )
+
+    # 创建任务（手动模式）
+    from app.models.models import TaskSource
+
+    task = Task(
+        filename=file.filename,
+        status=TaskStatus.PENDING,
+        source=TaskSource.MANUAL,
+    )
+    db.add(task)
+    await db.flush()
+
+    # 保存上传文件
+    task_dir = settings.UPLOAD_DIR / task.id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    filepath = task_dir / file.filename
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    # 创建任务子项
+    from app.models.models import TaskItem, ItemStatus
+    item = TaskItem(
+        task_id=task.id,
+        row_index=0,
+        original_image_path=str(filepath),
+        target_text=target_text.strip(),
+        status=ItemStatus.PENDING,
+    )
+    db.add(item)
+
+    task.total_items = 1
+    await db.commit()
+
+    logger.info(f"手动任务已创建: {task.id}, 图片: {file.filename}")
+
+    # 启动后台任务处理
+    from app.services.task_service import process_task
+    import asyncio
+    asyncio.create_task(process_task(task.id))
+
+    return TaskUploadResponse(
+        task_id=task.id,
+        message="手动任务创建成功，开始处理",
+        total_items=1,
+    )
+
+
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: str,
@@ -134,8 +210,9 @@ async def download_result(
     task_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """下载处理完成的 Excel"""
+    """下载处理结果（Excel 文件或结果图片）"""
     from fastapi.responses import FileResponse
+    from app.models.models import TaskSource, TaskItem
 
     result = await db.execute(
         select(Task).where(Task.id == task_id)
@@ -148,13 +225,28 @@ async def download_result(
     if task.status != TaskStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="任务尚未完成")
 
-    if not task.result_filepath or not Path(task.result_filepath).exists():
-        raise HTTPException(status_code=404, detail="结果文件不存在")
+    # Excel 模式：下载结果 Excel
+    if task.source == TaskSource.EXCEL:
+        if not task.result_filepath or not Path(task.result_filepath).exists():
+            raise HTTPException(status_code=404, detail="结果文件不存在")
+        return FileResponse(
+            task.result_filepath,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=f"result_{task.filename}",
+        )
+
+    # 手动模式：下载结果图片
+    item_result = await db.execute(
+        select(TaskItem).where(TaskItem.task_id == task_id).limit(1)
+    )
+    item = item_result.scalar_one_or_none()
+    if not item or not item.result_image_path or not Path(item.result_image_path).exists():
+        raise HTTPException(status_code=404, detail="结果图片不存在")
 
     return FileResponse(
-        task.result_filepath,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"result_{task.filename}",
+        item.result_image_path,
+        media_type="image/png",
+        filename=f"result_{Path(item.original_image_path).name}",
     )
 
 

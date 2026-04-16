@@ -17,6 +17,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+class TaskSource(str, enum.Enum):
+    """任务来源枚举"""
+    EXCEL = "excel"              # Excel 批量上传
+    MANUAL = "manual"            # 手动单张上传
+
+
 class TaskStatus(str, enum.Enum):
     """任务状态枚举"""
     PENDING = "pending"          # 等待处理
@@ -42,8 +48,15 @@ class Task(Base):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    filename: Mapped[str] = mapped_column(String(255), comment="原始文件名")
-    filepath: Mapped[str] = mapped_column(String(512), comment="服务器存储路径")
+    source: Mapped[TaskSource] = mapped_column(
+        Enum(TaskSource), default=TaskSource.EXCEL, comment="任务来源"
+    )
+    filename: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="原始文件名（Excel模式）"
+    )
+    filepath: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="服务器存储路径（Excel模式）"
+    )
     result_filepath: Mapped[str | None] = mapped_column(
         String(512), nullable=True, comment="结果文件路径"
     )
