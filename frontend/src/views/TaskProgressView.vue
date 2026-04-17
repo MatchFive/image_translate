@@ -140,12 +140,12 @@ function getRowStatusText(row: RowProgress) {
 async function loadTask() {
   try {
     task.value = await getTask(taskId.value)
-    totalRows.value = task.value.totalRows
-    processedRows.value = task.value.processedRows
+    totalRows.value = task.value.total_items
+    processedRows.value = task.value.completed_items
     // 初始化行列表
-    rows.value = Array.from({ length: task.value.totalRows }, (_, i) => ({
+    rows.value = Array.from({ length: task.value.total_items }, (_, i) => ({
       row: i + 1,
-      status: i < task.value.processedRows ? 'completed' as const : 'pending' as const,
+      status: i < task.value.completed_items ? 'completed' as const : 'pending' as const,
     }))
   } catch (err: any) {
     ElMessage.error('加载任务信息失败')

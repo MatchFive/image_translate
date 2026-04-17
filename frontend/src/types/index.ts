@@ -13,12 +13,29 @@ export interface RowProgress {
 export interface Task {
   id: string
   filename: string
-  totalRows: number
-  processedRows: number
+  total_items: number
+  completed_items: number
+  failed_items: number
   status: TaskStatus
-  createdAt: string
-  completedAt?: string
-  error?: string
+  progress: number
+  created_at: string
+  updated_at: string
+  error_message?: string
+  items?: TaskItemInfo[]
+}
+
+/** 任务子项信息 */
+export interface TaskItemInfo {
+  id: string
+  row_index: number
+  target_text: string
+  status: string
+  retry_count: number
+  ocr_result?: string
+  ocr_match_score?: number
+  error_message?: string
+  original_image_url?: string
+  result_image_url?: string
 }
 
 /** WebSocket 进度消息 */
@@ -37,7 +54,7 @@ export type TaskSource = 'excel' | 'manual'
 
 /** 上传响应 */
 export interface UploadResponse {
-  taskId: string
-  filename: string
-  totalRows: number
+  task_id: string
+  message: string
+  total_items: number
 }

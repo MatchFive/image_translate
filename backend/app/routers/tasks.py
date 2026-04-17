@@ -7,13 +7,13 @@ API 路由 - 任务管理
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
 from app.models.models import Task, TaskStatus
-from app.schemas import TaskResponse, TaskUploadResponse, TaskListResponse
+from app.schemas import TaskResponse, TaskUploadResponse, TaskListResponse, ExcelParseResponse
 from app.config import get_settings
 from app.services.excel_service import ExcelProcessor
 
@@ -22,31 +22,66 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 settings = get_settings()
 
 
+@router.post("/parse-excel", response_model=ExcelParseResponse)
+async def parse_excel_columns(
+    file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
+):
+    """
+    上传 Excel 并解析列头信息，返回列名列表供用户选择图片列和文字列。
+    文件会被临时保存，返回 temp_id 用于后续提交。
+    """
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 格式的 Excel 文件")
+
+    content = await file.read()
+    if len(content) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=400, detail=f"文件大小超过限制 ({settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB)")
+
+    # 临时保存
+    import tempfile, os
+    temp_dir = tempfile.mkdtemp(prefix="excel_parse_")
+    temp_path = os.path.join(temp_dir, file.filename)
+    with open(temp_path, "wb") as f:
+        f.write(content)
+
+    # 解析列头
+    try:
+        processor = ExcelProcessor("_parse")
+        columns = processor.parse_columns(temp_path)
+    except Exception as e:
+        logger.error(f"Excel 解析失败: {e}")
+        raise HTTPException(status_code=400, detail=f"Excel 解析失败: {e}")
+
+    # 用临时文件路径的 hash 作为 temp_id
+    temp_id = os.path.basename(temp_dir)
+
+    return ExcelParseResponse(
+        temp_id=temp_id,
+        temp_dir=temp_dir,
+        filename=file.filename,
+        columns=columns,
+    )
+
+
 @router.post("/upload", response_model=TaskUploadResponse)
 async def upload_excel(
     file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
+    image_col: int = Form(1, description="图片列序号（1-based）"),
+    text_col: int = Form(2, description="文字列序号（1-based）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     上传 Excel 文件，创建处理任务。
 
-    接受 .xlsx 文件，第一列是图片，第二列是替换文本。
+    支持用户指定哪一列是图片列、哪一列是文字列。
     上传后立即返回任务 ID，后台异步处理。
     """
-    # 验证文件类型
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(
-            status_code=400,
-            detail="仅支持 .xlsx 或 .xls 格式的 Excel 文件",
-        )
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 格式的 Excel 文件")
 
-    # 验证文件大小
     content = await file.read()
     if len(content) > settings.MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"文件大小超过限制 ({settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
-        )
+        raise HTTPException(status_code=400, detail=f"文件大小超过限制 ({settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB)")
 
     # 创建任务
     task = Task(
@@ -66,21 +101,21 @@ async def upload_excel(
     task.filepath = str(filepath)
     await db.commit()
 
-    logger.info(f"任务已创建: {task.id}, 文件: {file.filename}")
+    logger.info(f"任务已创建: {task.id}, 文件: {file.filename}, 图片列={image_col}, 文字列={text_col}")
 
-    # 解析 Excel 统计条目数
+    # 解析 Excel
     try:
         processor = ExcelProcessor(task.id)
-        items = processor.read_excel(filepath)
+        items = processor.read_excel(filepath, image_col=image_col, text_col=text_col)
         task.total_items = len(items)
         await db.commit()
     except Exception as e:
         logger.warning(f"Excel 预解析失败（不影响后续处理）: {e}")
 
-    # 启动后台任务处理
+    # 启动后台任务处理（传入列参数）
     from app.services.task_service import process_task
     import asyncio
-    asyncio.create_task(process_task(task.id))
+    asyncio.create_task(process_task(task.id, image_col=image_col, text_col=text_col))
 
     return TaskUploadResponse(
         task_id=task.id,

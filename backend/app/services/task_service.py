@@ -40,7 +40,7 @@ async def publish_progress(task_id: str, message: dict):
     )
 
 
-async def process_task(task_id: str):
+async def process_task(task_id: str, image_col: int = 1, text_col: int = 2):
     """
     异步任务处理主流程。
 
@@ -79,7 +79,7 @@ async def process_task(task_id: str):
 
             # ---- 解析 Excel ----
             excel_processor = ExcelProcessor(task_id)
-            items = excel_processor.read_excel(task.filepath)
+            items = excel_processor.read_excel(task.filepath, image_col=image_col, text_col=text_col)
             task.total_items = len(items)
             await session.commit()
 
@@ -160,7 +160,10 @@ async def process_task(task_id: str):
                 result_path = str(
                     settings.UPLOAD_DIR / task_id / result_filename
                 )
-                excel_processor.write_results(task.filepath, results, result_path)
+                excel_processor.write_results(
+                    task.filepath, results, result_path,
+                    image_col=image_col,
+                )
                 task.result_filepath = result_path
 
             # ---- 更新任务最终状态 ----

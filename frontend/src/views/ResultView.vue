@@ -15,9 +15,9 @@
 
         <el-descriptions :column="2" border class="task-info">
           <el-descriptions-item label="文件名">{{ task?.filename }}</el-descriptions-item>
-          <el-descriptions-item label="总行数">{{ task?.totalRows }}</el-descriptions-item>
-          <el-descriptions-item label="处理行数">{{ task?.processedRows }}</el-descriptions-item>
-          <el-descriptions-item label="完成时间">{{ task?.completedAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="总行数">{{ task?.total_items }}</el-descriptions-item>
+          <el-descriptions-item label="处理行数">{{ task?.completed_items }}</el-descriptions-item>
+          <el-descriptions-item label="失败行数">{{ task?.failed_items }}</el-descriptions-item>
         </el-descriptions>
 
         <!-- 预览对比区域 -->

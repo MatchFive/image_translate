@@ -6,13 +6,44 @@ const api = axios.create({
   timeout: 30000,
 })
 
-/** 上传 Excel 文件 */
-export async function uploadExcel(file: File): Promise<UploadResponse> {
+/** Excel 列信息 */
+export interface ExcelColumn {
+  index: number
+  name: string
+}
+
+/** Excel 解析响应 */
+export interface ExcelParseResponse {
+  temp_id: string
+  temp_dir: string
+  filename: string
+  columns: ExcelColumn[]
+}
+
+/** 解析 Excel 列头 */
+export async function parseExcel(file: File): Promise<ExcelParseResponse> {
   const formData = new FormData()
   formData.append('file', file)
+  const { data } = await api.post<ExcelParseResponse>('/tasks/parse-excel', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+  return data
+}
+
+/** 上传 Excel 文件（指定图片列和文字列） */
+export async function uploadExcel(
+  file: File,
+  imageCol: number,
+  textCol: number
+): Promise<UploadResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('image_col', String(imageCol))
+  formData.append('text_col', String(textCol))
   const { data } = await api.post<UploadResponse>('/tasks/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 120000, // 大文件上传可能较慢
+    timeout: 120000,
   })
   return data
 }

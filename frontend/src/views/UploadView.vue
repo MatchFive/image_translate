@@ -17,6 +17,7 @@
               accept=".xlsx,.xls"
               :on-change="handleExcelChange"
               :on-exceed="handleExceed"
+              :on-remove="handleExcelRemove"
             >
               <el-icon class="el-icon--upload" :size="64"><UploadFilled /></el-icon>
               <div class="el-upload__text">
@@ -24,17 +25,65 @@
               </div>
               <template #tip>
                 <div class="upload-tip">
-                  仅支持 .xlsx / .xls 格式，第一列为图片，第二列为替换文本
+                  支持 .xlsx / .xls 格式，上传后可选择图片列和文字列
                 </div>
               </template>
             </el-upload>
+
+            <!-- 列选择区域 -->
+            <div v-if="excelColumns.length > 0" class="column-select-area">
+              <el-divider content-position="left">📊 列映射配置</el-divider>
+              <p class="column-hint">
+                检测到 <strong>{{ excelColumns.length }}</strong> 列数据，请指定各列用途：
+              </p>
+              <div class="column-selectors">
+                <div class="selector-item">
+                  <span class="selector-label">🖼️ 图片列：</span>
+                  <el-select
+                    v-model="selectedImageCol"
+                    placeholder="选择图片所在列"
+                    size="large"
+                    class="selector-dropdown"
+                  >
+                    <el-option
+                      v-for="col in excelColumns"
+                      :key="col.index"
+                      :label="`第 ${col.index} 列 - ${col.name}`"
+                      :value="col.index"
+                    />
+                  </el-select>
+                </div>
+                <div class="selector-item">
+                  <span class="selector-label">📝 文字列：</span>
+                  <el-select
+                    v-model="selectedTextCol"
+                    placeholder="选择替换文字所在列"
+                    size="large"
+                    class="selector-dropdown"
+                  >
+                    <el-option
+                      v-for="col in excelColumns"
+                      :key="col.index"
+                      :label="`第 ${col.index} 列 - ${col.name}`"
+                      :value="col.index"
+                    />
+                  </el-select>
+                </div>
+              </div>
+            </div>
+
+            <!-- 解析中 loading -->
+            <div v-if="parsingExcel" class="parse-loading">
+              <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+              <span>正在解析 Excel 列信息...</span>
+            </div>
 
             <div class="upload-actions">
               <el-button
                 type="primary"
                 size="large"
                 :loading="uploading"
-                :disabled="!excelFile"
+                :disabled="!excelFile || !selectedImageCol || !selectedTextCol"
                 @click="handleExcelUpload"
               >
                 {{ uploading ? '上传中...' : '开始处理' }}
@@ -121,7 +170,7 @@
           <span>📖 使用说明</span>
         </template>
         <ol class="info-list">
-          <li><strong>Excel 模式：</strong>上传 Excel 文件，第一列放图片（PNG），第二列填写替换文本，结果写入第三列</li>
+          <li><strong>Excel 模式：</strong>上传 Excel 文件，系统自动解析所有列，您可以选择哪一列是图片、哪一列是替换文本</li>
           <li><strong>手动模式：</strong>上传单张 PNG 图片 + 输入目标文字，直接处理并返回结果</li>
           <li>部分图片可使用透明背景，系统会自动检测并处理</li>
           <li>通过 ComfyUI 进行文字重绘，本地 OCR 验证确保文字匹配</li>
@@ -134,9 +183,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, Loading } from '@element-plus/icons-vue'
 import { ElMessage, type UploadFile, type UploadInstance, type UploadRawFile } from 'element-plus'
-import { uploadExcel, uploadManual } from '@/api'
+import { uploadExcel, uploadManual, parseExcel, type ExcelColumn } from '@/api'
 
 const router = useRouter()
 
@@ -146,6 +195,10 @@ const activeMode = ref<'excel' | 'manual'>('excel')
 // Excel 模式
 const excelUploadRef = ref<UploadInstance>()
 const excelFile = ref<UploadRawFile | null>(null)
+const excelColumns = ref<ExcelColumn[]>([])
+const selectedImageCol = ref<number | null>(null)
+const selectedTextCol = ref<number | null>(null)
+const parsingExcel = ref(false)
 
 // 手动模式
 const manualUploadRef = ref<UploadInstance>()
@@ -162,22 +215,60 @@ function handleExceed() {
 }
 
 // ---- Excel ----
-function handleExcelChange(file: UploadFile) {
+async function handleExcelChange(file: UploadFile) {
   errorMsg.value = ''
-  if (file.raw) {
-    excelFile.value = file.raw
+  if (!file.raw) return
+  excelFile.value = file.raw
+
+  // 自动解析列头
+  parsingExcel.value = true
+  excelColumns.value = []
+  selectedImageCol.value = null
+  selectedTextCol.value = null
+
+  try {
+    const result = await parseExcel(file.raw)
+    excelColumns.value = result.columns
+    // 默认选第1列为图片列，第2列为文字列（如果有的话）
+    if (result.columns.length >= 2) {
+      selectedImageCol.value = result.columns[0].index
+      selectedTextCol.value = result.columns[1].index
+    } else if (result.columns.length === 1) {
+      selectedImageCol.value = result.columns[0].index
+    }
+  } catch (err: any) {
+    const msg = err?.response?.data?.detail || err?.message || 'Excel 解析失败'
+    errorMsg.value = msg
+  } finally {
+    parsingExcel.value = false
   }
 }
 
+function handleExcelRemove() {
+  excelFile.value = null
+  excelColumns.value = []
+  selectedImageCol.value = null
+  selectedTextCol.value = null
+}
+
 async function handleExcelUpload() {
-  if (!excelFile.value) return
+  if (!excelFile.value || !selectedImageCol.value || !selectedTextCol.value) return
+  if (selectedImageCol.value === selectedTextCol.value) {
+    errorMsg.value = '图片列和文字列不能是同一列'
+    return
+  }
+
   uploading.value = true
   errorMsg.value = ''
 
   try {
-    const result = await uploadExcel(excelFile.value)
-    ElMessage.success(`上传成功！共 ${result.totalRows} 行待处理`)
-    router.push({ name: 'TaskProgress', params: { taskId: result.taskId } })
+    const result = await uploadExcel(
+      excelFile.value,
+      selectedImageCol.value,
+      selectedTextCol.value
+    )
+    ElMessage.success(`上传成功！共 ${result.total_items} 行待处理`)
+    router.push({ name: 'TaskProgress', params: { taskId: result.task_id } })
   } catch (err: any) {
     const msg = err?.response?.data?.detail || err?.message || '上传失败，请重试'
     errorMsg.value = msg
@@ -191,7 +282,6 @@ function handleManualImageChange(file: UploadFile) {
   errorMsg.value = ''
   if (file.raw) {
     manualImage.value = file.raw
-    // 生成预览
     if (manualImagePreview.value) {
       URL.revokeObjectURL(manualImagePreview.value)
     }
@@ -207,7 +297,7 @@ async function handleManualUpload() {
   try {
     const result = await uploadManual(manualImage.value, targetText.value.trim())
     ElMessage.success('图片已提交处理！')
-    router.push({ name: 'TaskProgress', params: { taskId: result.taskId } })
+    router.push({ name: 'TaskProgress', params: { taskId: result.task_id } })
   } catch (err: any) {
     const msg = err?.response?.data?.detail || err?.message || '提交失败，请重试'
     errorMsg.value = msg
@@ -252,6 +342,53 @@ async function handleManualUpload() {
   color: #909399;
   font-size: 13px;
   margin-top: 8px;
+}
+
+.column-select-area {
+  margin-top: 20px;
+  padding: 16px;
+  background: #f0f5ff;
+  border-radius: 10px;
+  border: 1px solid #d9e4ff;
+}
+
+.column-hint {
+  margin: 8px 0 16px;
+  color: #606266;
+  font-size: 14px;
+}
+
+.column-selectors {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.selector-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.selector-label {
+  font-size: 15px;
+  font-weight: 500;
+  min-width: 100px;
+  color: #303133;
+}
+
+.selector-dropdown {
+  flex: 1;
+}
+
+.parse-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: #409eff;
+  font-size: 14px;
 }
 
 .image-preview {

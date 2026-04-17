@@ -62,6 +62,20 @@ class TaskUploadResponse(BaseModel):
     total_items: int
 
 
+class ExcelColumn(BaseModel):
+    """Excel 列信息"""
+    index: int = Field(..., description="列序号（1-based）")
+    name: str = Field(..., description="列名（表头文本）")
+
+
+class ExcelParseResponse(BaseModel):
+    """Excel 列解析响应"""
+    temp_id: str = Field(..., description="临时ID")
+    temp_dir: str = Field(..., description="临时目录路径")
+    filename: str = Field(..., description="文件名")
+    columns: list[ExcelColumn] = Field(..., description="列信息列表")
+
+
 # ============================================
 # WebSocket 消息 Schema
 # ============================================
