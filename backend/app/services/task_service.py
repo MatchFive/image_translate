@@ -19,6 +19,7 @@ from app.models.models import Task, TaskItem, TaskStatus, ItemStatus
 from app.redis import get_redis, task_channel_key
 from app.services.excel_service import ExcelProcessor
 from app.services.comfyui_service import ComfyUIClient
+from app.services.bailian_service import get_bailian_service
 from app.services.ocr_service import verify_text
 from app.services.image_service import process_image
 
@@ -107,7 +108,6 @@ async def process_task(task_id: str, image_col: int = 1, text_col: int = 2):
             await session.commit()
 
             # ---- 逐条处理 ----
-            comfyui = ComfyUIClient()
             results = {}
 
             # 重新加载所有 items
@@ -120,7 +120,7 @@ async def process_task(task_id: str, image_col: int = 1, text_col: int = 2):
             for idx, task_item in enumerate(task_items):
                 try:
                     result_path = await _process_single_item(
-                        session, task, task_item, comfyui, excel_processor
+                        session, task, task_item, excel_processor
                     )
                     if result_path:
                         results[task_item.row_index] = result_path
@@ -202,24 +202,24 @@ async def _process_single_item(
     session: AsyncSession,
     task: Task,
     task_item: TaskItem,
-    comfyui: ComfyUIClient,
     excel_processor: ExcelProcessor,
 ) -> str | None:
     """
     处理单个任务项。
 
+    支持 IMAGE_BACKEND=bailian（百练 API）或 comfyui。
     流程：
-    1. 提交 ComfyUI 重绘
-    2. 轮询获取结果
-    3. OCR 验证，不通过则重试
-    4. 图片后处理
-    5. 保存结果
+    1. 调用图片编辑后端重绘
+    2. OCR 验证，不通过则重试
+    3. 图片后处理
+    4. 保存结果
 
     Returns:
         处理后的图片路径（失败返回 None）
     """
     max_retries = settings.OCR_MAX_RETRIES
     original_image = Image.open(task_item.original_image_path)
+    image_backend = settings.IMAGE_BACKEND
 
     for attempt in range(max_retries + 1):
         # 更新状态
@@ -235,63 +235,95 @@ async def _process_single_item(
             await session.commit()
 
         try:
-            # Step 1: 提交 ComfyUI
-            prompt_id = await comfyui.submit_prompt(
-                image_path=task_item.original_image_path,
-                target_text=task_item.target_text,
-            )
-
-            # Step 2: 轮询结果
-            result_data = await comfyui.poll_result(prompt_id)
-
-            # Step 3: 获取结果图片
-            # 从 ComfyUI 输出中提取图片文件名
-            outputs = result_data.get("outputs", {})
-            output_images = []
-            for node_id, node_output in outputs.items():
-                if "images" in node_output:
-                    for img_info in node_output["images"]:
-                        output_images.append(img_info)
-
-            if not output_images:
-                raise ValueError("ComfyUI 未返回任何结果图片")
-
-            # 获取第一张结果图片
-            first_img = output_images[0]
-            result_image = await comfyui.get_result_image(
-                prompt_id, first_img["filename"]
-            )
-
-            # Step 4: OCR 验证
-            task_item.status = ItemStatus.OCR_CHECKING
-            await session.commit()
-
-            is_match, ocr_text, score = verify_text(
-                result_image, task_item.target_text
-            )
-            task_item.ocr_result = ocr_text
-            task_item.ocr_match_score = score
-
-            if not is_match and attempt < max_retries:
-                logger.info(
-                    f"TaskItem {task_item.id}: OCR 不匹配 "
-                    f"(score={score:.2f})，将重试"
+            if image_backend == "bailian":
+                # ---- 百练后端 ----
+                bailian = get_bailian_service()
+                result_path = await bailian.edit_image(
+                    image_path=task_item.original_image_path,
+                    target_text=task_item.target_text,
+                    output_dir=str(settings.UPLOAD_DIR / task.id),
                 )
-                continue
+                if not result_path:
+                    raise ValueError("百练图生图失败")
 
-            # Step 5: 图片后处理
-            result_filename = f"result_{task_item.row_index}.png"
-            result_path = str(
-                settings.UPLOAD_DIR / task.id / result_filename
-            )
-            process_image(result_image, original_image, result_path)
+                result_image = Image.open(result_path)
 
-            # Step 6: 更新结果
-            task_item.result_image_path = result_path
+                # OCR 验证
+                task_item.status = ItemStatus.OCR_CHECKING
+                await session.commit()
+
+                is_match, ocr_text, score = verify_text(
+                    result_image, task_item.target_text
+                )
+                task_item.ocr_result = ocr_text
+                task_item.ocr_match_score = score
+
+                if not is_match and attempt < max_retries:
+                    logger.info(
+                        f"TaskItem {task_item.id}: OCR 不匹配 "
+                        f"(score={score:.2f})，将重试"
+                    )
+                    continue
+
+                # 百练后端已在内部完成缩放+去黑，直接用
+                final_path = result_path
+
+            else:
+                # ---- ComfyUI 后端（原有逻辑） ----
+                comfyui = ComfyUIClient()
+
+                prompt_id = await comfyui.submit_prompt(
+                    image_path=task_item.original_image_path,
+                    target_text=task_item.target_text,
+                )
+
+                result_data = await comfyui.poll_result(prompt_id)
+
+                outputs = result_data.get("outputs", {})
+                output_images = []
+                for node_id, node_output in outputs.items():
+                    if "images" in node_output:
+                        for img_info in node_output["images"]:
+                            output_images.append(img_info)
+
+                if not output_images:
+                    raise ValueError("ComfyUI 未返回任何结果图片")
+
+                first_img = output_images[0]
+                result_image = await comfyui.get_result_image(
+                    prompt_id, first_img["filename"]
+                )
+
+                # OCR 验证
+                task_item.status = ItemStatus.OCR_CHECKING
+                await session.commit()
+
+                is_match, ocr_text, score = verify_text(
+                    result_image, task_item.target_text
+                )
+                task_item.ocr_result = ocr_text
+                task_item.ocr_match_score = score
+
+                if not is_match and attempt < max_retries:
+                    logger.info(
+                        f"TaskItem {task_item.id}: OCR 不匹配 "
+                        f"(score={score:.2f})，将重试"
+                    )
+                    continue
+
+                # 图片后处理
+                result_filename = f"result_{task_item.row_index}.png"
+                final_path = str(
+                    settings.UPLOAD_DIR / task.id / result_filename
+                )
+                process_image(result_image, original_image, final_path)
+
+            # 更新结果
+            task_item.result_image_path = final_path
             task_item.status = ItemStatus.COMPLETED
             await session.commit()
 
-            return result_path
+            return final_path
 
         except Exception as e:
             logger.warning(

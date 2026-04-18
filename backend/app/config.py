@@ -45,6 +45,14 @@ class Settings:
         self.COMFYUI_POLL_INTERVAL: int = int(os.getenv("COMFYUI_POLL_INTERVAL", "2"))
         self.COMFYUI_TIMEOUT: int = int(os.getenv("COMFYUI_TIMEOUT", "300"))
 
+        # ---- 阿里百练 ----
+        self.IMAGE_BACKEND: str = os.getenv("IMAGE_BACKEND", "bailian")  # "bailian" or "comfyui"
+        self.BAILIAN_API_KEY: str = os.getenv("BAILIAN_API_KEY", "")
+        self.BAILIAN_IMAGE_MODEL: str = os.getenv("BAILIAN_IMAGE_MODEL", "qwen-image-edit-plus")
+
+        # ---- OCR 后端 ----
+        self.OCR_BACKEND: str = os.getenv("OCR_BACKEND", "rapidocr")  # "rapidocr" or "bailian"
+
         # ---- 图片处理 ----
         self.OCR_MAX_RETRIES: int = int(os.getenv("OCR_MAX_RETRIES", "3"))
         self.OCR_MATCH_THRESHOLD: float = float(os.getenv("OCR_MATCH_THRESHOLD", "0.8"))
