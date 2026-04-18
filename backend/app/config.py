@@ -46,9 +46,14 @@ class Settings:
         self.COMFYUI_TIMEOUT: int = int(os.getenv("COMFYUI_TIMEOUT", "300"))
 
         # ---- 阿里百练 ----
-        self.IMAGE_BACKEND: str = os.getenv("IMAGE_BACKEND", "bailian")  # "bailian" or "comfyui"
+        self.IMAGE_BACKEND: str = os.getenv("IMAGE_BACKEND", "bailian")  # "bailian" or "comfyui" or "nanobanana"
         self.BAILIAN_API_KEY: str = os.getenv("BAILIAN_API_KEY", "")
         self.BAILIAN_IMAGE_MODEL: str = os.getenv("BAILIAN_IMAGE_MODEL", "qwen-image-edit-plus")
+
+        # ---- Nano Banana (OpenAI 兼容 images/edits) ----
+        self.NANO_BANANA_BASE_URL: str = os.getenv("NANO_BANANA_BASE_URL", "")
+        self.NANO_BANANA_API_KEY: str = os.getenv("NANO_BANANA_API_KEY", "")
+        self.NANO_BANANA_MODEL: str = os.getenv("NANO_BANANA_MODEL", "gpt-image-1")
 
         # ---- OCR 后端 ----
         self.OCR_BACKEND: str = os.getenv("OCR_BACKEND", "rapidocr")  # "rapidocr" or "bailian"

@@ -22,6 +22,44 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 settings = get_settings()
 
 
+@router.get("/backends", summary="获取可用的图片编辑后端列表")
+async def get_available_backends():
+    """检查后台配置，返回可用的重绘后端列表.
+
+    前端根据此接口动态展示可选后端。
+    """
+    backends = []
+
+    # 百练
+    if settings.BAILIAN_API_KEY:
+        backends.append({
+            "id": "bailian",
+            "name": "阿里百练",
+            "description": "百练 qwen-image-edit-plus，无需本地部署",
+        })
+
+    # Nano Banana (OpenAI 兼容)
+    if settings.NANO_BANANA_BASE_URL and settings.NANO_BANANA_API_KEY:
+        backends.append({
+            "id": "nanobanana",
+            "name": "Nano Banana",
+            "description": "OpenAI 兼容 images/edits 接口",
+        })
+
+    # ComfyUI
+    if settings.COMFYUI_API_URL:
+        backends.append({
+            "id": "comfyui",
+            "name": "ComfyUI",
+            "description": "本地 ComfyUI 实例",
+        })
+
+    return {
+        "backends": backends,
+        "default": settings.IMAGE_BACKEND,
+    }
+
+
 @router.post("/parse-excel", response_model=ExcelParseResponse)
 async def parse_excel_columns(
     file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
@@ -68,6 +106,7 @@ async def upload_excel(
     file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
     image_col: int = Form(1, description="图片列序号（1-based）"),
     text_col: int = Form(2, description="文字列序号（1-based）"),
+    backend: str = Form(None, description="图片编辑后端: bailian / nanobanana / comfyui"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -115,7 +154,7 @@ async def upload_excel(
     # 启动后台任务处理（传入列参数）
     from app.services.task_service import process_task
     import asyncio
-    asyncio.create_task(process_task(task.id, image_col=image_col, text_col=text_col))
+    asyncio.create_task(process_task(task.id, image_col=image_col, text_col=text_col, backend=backend))
 
     return TaskUploadResponse(
         task_id=task.id,
@@ -128,6 +167,7 @@ async def upload_excel(
 async def upload_manual(
     file: UploadFile = File(..., description="待处理的图片文件（PNG）"),
     target_text: str = File(..., description="目标替换文本"),
+    backend: str = Form(None, description="图片编辑后端: bailian / nanobanana / comfyui"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -191,7 +231,7 @@ async def upload_manual(
     # 启动后台任务处理
     from app.services.task_service import process_task
     import asyncio
-    asyncio.create_task(process_task(task.id))
+    asyncio.create_task(process_task(task.id, backend=backend))
 
     return TaskUploadResponse(
         task_id=task.id,

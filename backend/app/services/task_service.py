@@ -20,6 +20,7 @@ from app.redis import get_redis, task_channel_key
 from app.services.excel_service import ExcelProcessor
 from app.services.comfyui_service import ComfyUIClient
 from app.services.bailian_service import get_bailian_service
+from app.services.nanobanana_service import get_nanobanana_service
 from app.services.ocr_service import verify_text
 from app.services.image_service import process_image
 
@@ -41,7 +42,7 @@ async def publish_progress(task_id: str, message: dict):
     )
 
 
-async def process_task(task_id: str, image_col: int = 1, text_col: int = 2):
+async def process_task(task_id: str, image_col: int = 1, text_col: int = 2, backend: str | None = None):
     """
     异步任务处理主流程。
 
@@ -120,7 +121,7 @@ async def process_task(task_id: str, image_col: int = 1, text_col: int = 2):
             for idx, task_item in enumerate(task_items):
                 try:
                     result_path = await _process_single_item(
-                        session, task, task_item, excel_processor
+                        session, task, task_item, excel_processor, backend=backend
                     )
                     if result_path:
                         results[task_item.row_index] = result_path
@@ -203,11 +204,12 @@ async def _process_single_item(
     task: Task,
     task_item: TaskItem,
     excel_processor: ExcelProcessor,
+    backend: str | None = None,
 ) -> str | None:
     """
     处理单个任务项。
 
-    支持 IMAGE_BACKEND=bailian（百练 API）或 comfyui。
+    支持 backend=bailian/nanobanana/comfyui，默认用配置中的 IMAGE_BACKEND。
     流程：
     1. 调用图片编辑后端重绘
     2. OCR 验证，不通过则重试
@@ -219,7 +221,7 @@ async def _process_single_item(
     """
     max_retries = settings.OCR_MAX_RETRIES
     original_image = Image.open(task_item.original_image_path)
-    image_backend = settings.IMAGE_BACKEND
+    image_backend = backend or settings.IMAGE_BACKEND
 
     for attempt in range(max_retries + 1):
         # 更新状态
@@ -266,6 +268,38 @@ async def _process_single_item(
                     continue
 
                 # 百练后端已在内部完成缩放+去黑，直接用
+                final_path = result_path
+
+            elif image_backend == "nanobanana":
+                # ---- Nano Banana 后端 (OpenAI 兼容) ----
+                nanobanana = get_nanobanana_service()
+                result_path = await nanobanana.edit_image(
+                    image_path=task_item.original_image_path,
+                    target_text=task_item.target_text,
+                    output_dir=str(settings.UPLOAD_DIR / task.id),
+                )
+                if not result_path:
+                    raise ValueError("NanoBanana 图生图失败")
+
+                result_image = Image.open(result_path)
+
+                # OCR 验证
+                task_item.status = ItemStatus.OCR_CHECKING
+                await session.commit()
+
+                is_match, ocr_text, score = verify_text(
+                    result_image, task_item.target_text
+                )
+                task_item.ocr_result = ocr_text
+                task_item.ocr_match_score = score
+
+                if not is_match and attempt < max_retries:
+                    logger.info(
+                        f"TaskItem {task_item.id}: OCR 不匹配 "
+                        f"(score={score:.2f})，将重试"
+                    )
+                    continue
+
                 final_path = result_path
 
             else:
