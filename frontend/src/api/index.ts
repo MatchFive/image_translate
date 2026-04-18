@@ -6,6 +6,25 @@ const api = axios.create({
   timeout: 30000,
 })
 
+/** 图片编辑后端信息 */
+export interface ImageBackend {
+  id: string
+  name: string
+  description: string
+}
+
+/** 后端列表响应 */
+export interface BackendsResponse {
+  backends: ImageBackend[]
+  default: string
+}
+
+/** 获取可用的图片编辑后端列表 */
+export async function getBackends(): Promise<BackendsResponse> {
+  const { data } = await api.get<BackendsResponse>('/tasks/backends')
+  return data
+}
+
 /** Excel 列信息 */
 export interface ExcelColumn {
   index: number
@@ -35,12 +54,14 @@ export async function parseExcel(file: File): Promise<ExcelParseResponse> {
 export async function uploadExcel(
   file: File,
   imageCol: number,
-  textCol: number
+  textCol: number,
+  backend?: string
 ): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('image_col', String(imageCol))
   formData.append('text_col', String(textCol))
+  if (backend) formData.append('backend', backend)
   const { data } = await api.post<UploadResponse>('/tasks/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
@@ -51,11 +72,13 @@ export async function uploadExcel(
 /** 手动上传单张图片 + 目标文本 */
 export async function uploadManual(
   file: File,
-  targetText: string
+  targetText: string,
+  backend?: string
 ): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('target_text', targetText)
+  if (backend) formData.append('backend', backend)
   const { data } = await api.post<UploadResponse>('/tasks/upload-manual', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,

@@ -153,6 +153,23 @@
         </el-tab-pane>
       </el-tabs>
 
+      <!-- 后端选择器（通用） -->
+      <el-card v-if="availableBackends.length > 0" class="backend-card" shadow="never">
+        <div class="backend-select">
+          <span class="backend-label">🔧 重绘引擎：</span>
+          <el-radio-group v-model="selectedBackend" size="large">
+            <el-radio-button
+              v-for="b in availableBackends"
+              :key="b.id"
+              :value="b.id"
+            >
+              {{ b.name }}
+            </el-radio-button>
+          </el-radio-group>
+          <span v-if="currentBackendDesc" class="backend-desc">{{ currentBackendDesc }}</span>
+        </div>
+      </el-card>
+
       <!-- 错误提示 -->
       <el-alert
         v-if="errorMsg"
@@ -173,7 +190,8 @@
           <li><strong>Excel 模式：</strong>上传 Excel 文件，系统自动解析所有列，您可以选择哪一列是图片、哪一列是替换文本</li>
           <li><strong>手动模式：</strong>上传单张 PNG 图片 + 输入目标文字，直接处理并返回结果</li>
           <li>部分图片可使用透明背景，系统会自动检测并处理</li>
-          <li>通过 ComfyUI 进行文字重绘，本地 OCR 验证确保文字匹配</li>
+          <li>支持多种 AI 重绘后端：百练 / Nano Banana / ComfyUI</li>
+          <li>本地 OCR 验证确保文字匹配，不匹配自动重试</li>
         </ol>
       </el-card>
     </div>
@@ -181,11 +199,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { UploadFilled, Loading } from '@element-plus/icons-vue'
 import { ElMessage, type UploadFile, type UploadInstance, type UploadRawFile } from 'element-plus'
-import { uploadExcel, uploadManual, parseExcel, type ExcelColumn } from '@/api'
+import { uploadExcel, uploadManual, parseExcel, getBackends, type ExcelColumn, type ImageBackend } from '@/api'
 
 const router = useRouter()
 
@@ -209,6 +227,23 @@ const targetText = ref('')
 // 通用
 const uploading = ref(false)
 const errorMsg = ref('')
+
+// 后端选择
+const availableBackends = ref<ImageBackend[]>([])
+const selectedBackend = ref<string>('')
+
+// 加载可用后端
+getBackends().then(res => {
+  availableBackends.value = res.backends
+  selectedBackend.value = res.default
+}).catch(() => {
+  // 获取失败不影响使用
+})
+
+const currentBackendDesc = computed(() => {
+  const b = availableBackends.value.find(b => b.id === selectedBackend.value)
+  return b?.description || ''
+})
 
 function handleExceed() {
   ElMessage.warning('只能上传一个文件，请先移除已选文件')
@@ -265,7 +300,8 @@ async function handleExcelUpload() {
     const result = await uploadExcel(
       excelFile.value,
       selectedImageCol.value,
-      selectedTextCol.value
+      selectedTextCol.value,
+      selectedBackend.value
     )
     ElMessage.success(`上传成功！共 ${result.total_items} 行待处理`)
     router.push({ name: 'TaskProgress', params: { taskId: result.task_id } })
@@ -295,7 +331,7 @@ async function handleManualUpload() {
   errorMsg.value = ''
 
   try {
-    const result = await uploadManual(manualImage.value, targetText.value.trim())
+    const result = await uploadManual(manualImage.value, targetText.value.trim(), selectedBackend.value)
     ElMessage.success('图片已提交处理！')
     router.push({ name: 'TaskProgress', params: { taskId: result.task_id } })
   } catch (err: any) {
@@ -433,5 +469,28 @@ async function handleManualUpload() {
   line-height: 2;
   color: #606266;
   font-size: 14px;
+}
+
+.backend-card {
+  border-radius: 12px;
+  margin-top: -8px;
+}
+
+.backend-select {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.backend-label {
+  font-weight: 500;
+  color: #303133;
+  white-space: nowrap;
+}
+
+.backend-desc {
+  color: #909399;
+  font-size: 13px;
 }
 </style>
